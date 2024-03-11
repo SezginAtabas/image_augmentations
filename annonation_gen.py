@@ -8,22 +8,22 @@ blend_path = ""
 output_path = ""
 hdr_path = ""
 
+os.makedirs(output_path, exist_ok=True)
+
 # how many times the scene is rendered
 render_count = 1
 # how many times randomizer is triggered
-randomize_count = 1
+randomize_count = 100
 # name of the target object that will be targed
 target_name = "avocado"
 cluster_name = "avs"
 
 # params for randomizer
-light_energy_range = [1, 2]
-light_rotation_amount = [[-5, 5], [-5, 5], [-5, 5]]
+light_energy_range = [2.5, 4.0]
+light_rotation_range = [[-60, 60], [-45, 45], [0, 360]]
 
-target_rotation_amount = [[-30, 30], [-30, 30], [-30, 30]]
+target_rotation_amount = [[-5, 5], [-5, 5], [-5, 5]]
 target_default_rotation = [0, -90, 0]
-
-mat_specular_range = [0.2, 0.4]
 
 bproc.init()
 
@@ -40,28 +40,30 @@ for obj in objs:
         obj.set_cp("category_id", 1)
 
     elif cluster_name in obj_name:
-        target_clusters.append(obj)
+        target_clusters.append(obj)    
         
 # find the target material
 materials = bproc.material.collect_all()
 target_material = bproc.filter.one_by_attr(materials, "name", "Material.002")
+grass_material = bproc.filter.one_by_attr(materials, "name", "grass_mat")
 
 # create light
 light = bproc.types.Light()
 light.set_type("SUN")
 light.set_location([0.0, 0.0, 50.0])
-light.set_rotation_euler([30, 5, 5])
+light.set_rotation_euler([45, 5, 5])
 light.set_energy(1)
         
 bproc.world.set_world_background_hdr_img(hdr_path)
-bproc.camera.set_resolution(720, 360)
+bproc.camera.set_resolution(320, 320)
 #bproc.camera.set_intrinsics_from_blender_params(lens=2.8, lens_unit="MILLIMETERS")
 
 target_default_rotation = list(map(math.radians, target_default_rotation))
 
 
 # add the poi of all targets to poi list
-poi_list = [bproc.object.compute_poi(target_objects), ]
+#poi_list = [bproc.object.compute_poi(target_objects), ]
+poi_list = []
 
 # find the poi to look at for each target cluster
 for cluster in target_clusters:
@@ -72,22 +74,24 @@ for cluster in target_clusters:
     # calculate poi and add it to list
     poi_list.append(bproc.object.compute_poi(cluster_children))
 
-
-
 # Camera settings for each POI
 num_steps_per_poi = 25
 camera_radius = 20
-camera_height = 8
+camera_height = 6
 walk_magnitude = np.pi/32  # Maximum random rotation per step
 
-for render_c in range(render_count):        
+for render_c in range(render_count):
     bproc.utility.reset_keyframes()
+    
     for i in range(randomize_count):
         
-        for poi in poi_list:        
+        camera_radius = np.random.uniform(20.0 , 25.0)
+        camera_height = np.random.uniform(5.5, 8.0)
+        
+        for poi in poi_list:
+            
             # randomize object rotation
             for obj in target_objects:
-                        
                 # random angles
                 rand_rotation = np.random.uniform(
                     [target_rotation_amount[0][0], target_rotation_amount[1][0], target_rotation_amount[2][0]],
@@ -101,19 +105,27 @@ for render_c in range(render_count):
                 obj.set_rotation_euler([r1 + r2 for r1, r2 in zip(rand_rotation, target_default_rotation)])
                     
             # randomize material
-                target_material.set_principled_shader_value("Specular", np.random.uniform(mat_specular_range[0], mat_specular_range[1]))
+            target_material.set_principled_shader_value("Specular", np.random.uniform(0.1, 1.0))
+            target_material.set_principled_shader_value("Subsurface", np.random.uniform(0.0, 0.3))
+            target_material.set_principled_shader_value("Metallic", np.random.uniform(0.0, 0.6))
+            target_material.set_principled_shader_value("Sheen", np.random.uniform(0.0, 1.0))
+            
+            grass_material.set_principled_shader_value("Specular", np.random.uniform(0.4, 1.0))
+            grass_material.set_principled_shader_value("Subsurface", np.random.uniform(0.0, 0.5))
+            grass_material.set_principled_shader_value("Metallic", np.random.uniform(0.0, 1.0))
+            grass_material.set_principled_shader_value("Roughness", np.random.uniform(0.0, 1.0))
             
             # randomize light rotation
             current_light_rotation = light.get_rotation_euler()      
             light_random_rotation = np.random.uniform(
-                [light_rotation_amount[0][0], light_rotation_amount[1][0], light_rotation_amount[2][0]],
-                [light_rotation_amount[0][1], light_rotation_amount[1][1], light_rotation_amount[2][1]]
+                [light_rotation_range[0][0], light_rotation_range[1][0], light_rotation_range[2][0]],
+                [light_rotation_range[0][1], light_rotation_range[1][1], light_rotation_range[2][1]]
                 )
             
             # convert to radians
             light_random_rotation = list(map(math.radians, light_random_rotation))     
-            # set light rotation
-            light.set_rotation_euler([ r1 + r2 for r1, r2 in zip(light_random_rotation, current_light_rotation)])
+
+            light.set_rotation_euler([i for i in light_random_rotation])
                 
             # randomize light energy
             light.set_energy(np.random.uniform(light_energy_range[0], light_energy_range[1]))
@@ -161,11 +173,18 @@ for render_c in range(render_count):
 
                 # Add camera pose with location and rotation
                 cam2world_matrix = bproc.math.build_transformation_mat(location_cam, rotation_matrix)
+                
+                # add camera pose
                 bproc.camera.add_camera_pose(cam2world_matrix)
-         
+
     # activate normal rendering
     #bproc.renderer.enable_normals_output()
     bproc.renderer.enable_segmentation_output(default_values={'category_id': 99}, map_by=["category_id", "instance", "name"])
+    
+    bproc.renderer.set_max_amount_of_samples(512)
+    bproc.renderer.set_noise_threshold(0.005)
+    bproc.renderer.set_light_bounces(diffuse_bounces=100, ao_bounces_render=50, glossy_bounces=50)
+
     
     # render the whole pipeline
     data = bproc.renderer.render()
@@ -176,24 +195,4 @@ for render_c in range(render_count):
                                         instance_attribute_maps=data["instance_attribute_maps"],
                                         colors=data["colors"],
                                         color_file_format="PNG")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

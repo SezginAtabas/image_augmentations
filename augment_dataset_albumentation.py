@@ -1,12 +1,10 @@
 import os
 import cv2
-import torch
 import shutil
 import random
 
 import albumentations as A
 from albumentations.core import convert_bbox_to_albumentations, convert_bboxes_from_albumentations, convert_bboxes_to_albumentations
-
 from ultralytics.utils.ops import clip_boxes
 
 def load_data(root):
@@ -43,7 +41,7 @@ def load_data(root):
     print(f"loaded { len(data['images']) }")   
     return data
 
-def convert_to_albumentations(images, bboxes, clip = True):
+def convert_to_albumentations(images, bboxes, source_format = 'yolo', clip = True):
     assert len(images) == len(bboxes)
     
     
@@ -57,7 +55,7 @@ def convert_to_albumentations(images, bboxes, clip = True):
         to_add = []
         for box in boxes: 
             # convert each box to albumentations
-            converted_bbox = convert_bbox_to_albumentations(bbox=box, source_format='yolo', rows=img_height, cols=img_width)
+            converted_bbox = convert_bbox_to_albumentations(bbox=box, source_format=source_format, rows=img_height, cols=img_width)
 
             converted_bbox = [round(e) if e < 0 else e for e in converted_bbox]
             
@@ -99,7 +97,7 @@ def save_data(save_dir, data, is_path = False, name="augmented_img_", img_extens
         with open(label_save_path, 'w') as file:
             for box, label in zip(bboxes, class_labels):
                 formatted_box = " ".join(f"{coord:.10f}" for coord in box)
-                file.write(f"{label} {formatted_box}\n")
+                file.write(f"{0.0} {formatted_box}\n")
 
     print(f"saved {len(data['images'])} images to {img_save_dir}")
     print(f"saved {len(data['images'])} labels to {label_save_dir}")
@@ -179,50 +177,61 @@ def visualize(bboxes, img, convert):
 
 
 transform = A.Compose([
-    
-    A.NoOp()
-    #A.Resize(height=640, width=640, interpolation=cv2.INTER_LANCZOS4) 
-    
-    #A.HorizontalFlip(),
-    #A.ColorJitter(contrast=0.1),
-    #A.BBoxSafeRandomCrop(),
-    #A.Flip(),
-    #A.Rotate(interpolation=cv2.INTER_LANCZOS4),
-    #A.GaussNoise(var_limit=(5.0, 15.0)),
-    #A.GaussianBlur(blur_limit=1, p=0.3),
-    #A.RandomScale(scale_limit=(-0.25, 0.15), interpolation=cv2.INTER_LANCZOS4, p=0.45),
-    #A.Cutout(num_holes=5, max_h_size=40, max_w_size=40, p=0.4)
-    
-    
-    
-    #A.Transpose(p=0.4),
-    #A.Flip(p=0.5),
-    #A.RandomScale(scale_limit=(-0.25, 0.15), interpolation=cv2.INTER_LANCZOS4, p=0.45),
-    #A.Affine(scale=((0.95, 1.15)), translate_percent=(0.3, 0.02), shear=(-10, 10), interpolation=cv2.INTER_LANCZOS4, p=0.8),                                                 
-    #A.Perspective(scale=(0.015, 0.02), keep_size=False, interpolation=cv2.INTER_LANCZOS4, p=0.25),
-    #A.PadIfNeeded(min_height=720, min_width=1280, border_mode=cv2.BORDER_CONSTANT, position=A.PadIfNeeded.PositionType.RANDOM),
                                            
-], bbox_params=A.BboxParams(format='albumentations', min_visibility=0.5, label_fields=['class_labels']))
+], bbox_params=A.BboxParams(format='albumentations', min_area=1300, min_width=30, min_height=30, min_visibility=1.0, label_fields=['class_labels']))
 
+
+hand_labeled_transforms = A.Compose([
+], bbox_params=A.BboxParams(format='albumentations', min_visibility=0.7, min_area=1000, min_width=30, min_height=30, label_fields=['class_labels']))
 
 def main():
+   
     data_dir = ""
     out_dir = ""
     
     data = load_data(data_dir)
     
-    aug_data = augment(data, transform, p=1.0, augment_save_dir=out_dir, aug_save_name="data_aug_train_1#final##" )
+    data['bboxes'] = convert_to_albumentations(data['images'], data['bboxes'], source_format="yolo", clip=False)
+    
+    aug_data = augment(data, hand_labeled_transforms, p=1.0, augment_save_dir=out_dir, aug_save_name="val_1_bbox_f_" )
     
     # convert to yolo format for training
     aug_data['bboxes'] = [convert_bboxes_from_albumentations(tuple(map(tuple, d)), target_format='yolo', 
-                                rows=640, cols=640, check_validity=True) for d in aug_data['bboxes']]
+                            rows=im.shape[0], cols=im.shape[1], check_validity=True) for d, im in zip(aug_data['bboxes'],aug_data['images'])]
     
-    save_data(out_dir, aug_data, is_path=False, name="data_aug_train_1#final#")
+    save_data(out_dir, aug_data, is_path=False, name="val_1_bbox_f_")
     
-
+    """
+    parent_folder = ""
+    out_dir = ""
+    
+    data = {'images' : [], 'bboxes' : [], 'class_labels' : []}
+    
+    for i in range(1, 3):
+       new_data = load_data(os.path.join(parent_folder, str(i) + "_out"))
+       
+       # convert to albumentations
+       new_data['bboxes'] = convert_to_albumentations(new_data['images'], new_data['bboxes'], source_format='coco', clip=False)
+       
+       new_data = augment(new_data, transform, p=1.0, augment_save_dir=out_dir, aug_save_name="synth3" )
+       
+       # convert to yolo
+       new_data['bboxes'] = [convert_bboxes_from_albumentations(tuple(map(tuple, d)), target_format='yolo', 
+            rows=im.shape[0], cols=im.shape[1], check_validity=True) for d, im in zip(new_data['bboxes'],new_data['images'])]
+       
+       # add the new data
+       for img, bbox, class_label in zip(new_data['images'], new_data['bboxes'], new_data['class_labels']):
+            data['images'].append(img)
+            data['bboxes'].append(bbox)
+            data['class_labels'].append(class_label)
+    
+    # save the data
+    save_data(save_dir=out_dir, data=data, name='synth3', is_path=False)
+    aug_data = data
+   """
+     
     idx = 0
     while True:
-        # convert if bbox format is not in albumentations.
         visualize(aug_data['bboxes'][idx], aug_data['images'][idx], convert=True)
         cv2.imshow('img', aug_data['images'][idx])
         
@@ -236,11 +245,9 @@ def main():
             
         if key == ord('a') and idx > 0:
             idx -=1    
-            
-    
     
     cv2.destroyAllWindows()
-    
+   
     
 
 if __name__ == "__main__":
